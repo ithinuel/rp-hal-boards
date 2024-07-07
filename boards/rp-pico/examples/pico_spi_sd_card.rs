@@ -246,7 +246,7 @@ fn main() -> ! {
         .spi(|spi| spi.set_baudrate(clocks.peripheral_clock.freq(), 16.MHz()));
 
     info!("Getting Volume 0...");
-    let mut volume = match volume_mgr.get_volume(VolumeIdx(0)) {
+    let volume = match volume_mgr.open_volume(VolumeIdx(0)) {
         Ok(v) => v,
         Err(e) => {
             error!("Error getting volume 0: {}", defmt::Debug2Format(&e));
@@ -258,7 +258,7 @@ fn main() -> ! {
 
     // After we have the volume (partition) of the drive we got to open the
     // root directory:
-    let dir = match volume_mgr.open_root_dir(&volume) {
+    let dir = match volume_mgr.open_root_dir(volume) {
         Ok(dir) => dir,
         Err(e) => {
             error!("Error opening root dir: {}", defmt::Debug2Format(&e));
@@ -272,7 +272,7 @@ fn main() -> ! {
     // This shows how to iterate through the directory and how
     // to get the file names (and print them in hope they are UTF-8 compatible):
     volume_mgr
-        .iterate_dir(&volume, &dir, |ent| {
+        .iterate_dir(dir, |ent| {
             info!(
                 "/{}.{}",
                 core::str::from_utf8(ent.name.base_name()).unwrap(),
@@ -286,10 +286,10 @@ fn main() -> ! {
     let mut successful_read = false;
 
     // Next we going to read a file from the SD card:
-    if let Ok(mut file) = volume_mgr.open_file_in_dir(&mut volume, &dir, "O.TST", Mode::ReadOnly) {
+    if let Ok(file) = volume_mgr.open_file_in_dir(dir, "O.TST", Mode::ReadOnly) {
         let mut buf = [0u8; 32];
-        let read_count = volume_mgr.read(&volume, &mut file, &mut buf).unwrap();
-        volume_mgr.close_file(&volume, file).unwrap();
+        let read_count = volume_mgr.read(file, &mut buf).unwrap();
+        volume_mgr.close_file(file).unwrap();
 
         if read_count >= 2 {
             info!("READ {} bytes: {}", read_count, buf);
@@ -305,12 +305,12 @@ fn main() -> ! {
 
     blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
 
-    match volume_mgr.open_file_in_dir(&mut volume, &dir, "O.TST", Mode::ReadWriteCreateOrTruncate) {
-        Ok(mut file) => {
+    match volume_mgr.open_file_in_dir(dir, "O.TST", Mode::ReadWriteCreateOrTruncate) {
+        Ok(file) => {
             volume_mgr
-                .write(&mut volume, &mut file, b"\x42\x1E")
+                .write(file, b"\x42\x1E")
                 .unwrap();
-            volume_mgr.close_file(&volume, file).unwrap();
+            volume_mgr.close_file(file).unwrap();
         }
         Err(e) => {
             error!("Error opening file 'O.TST': {}", defmt::Debug2Format(&e));
