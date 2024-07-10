@@ -41,7 +41,9 @@ display-interface-spi = "0.4.1"
 embedded-graphics = "0.7.1"
 embedded-hal = "1.0.0"
 embedded-hal-nb = "1.0.0"
-embedded-sdmmc = "0.6.0"
+embedded-hal-bus = "0.2.0"
+portable-atomic = { version = "*", features = [ "critical-section" ] }
+embedded-sdmmc = "0.7.0"
 embedded_hal_0_2 = { package = "embedded-hal", version = "0.2.5", features = ["unproven", ] }
 fugit = "0.3.7"
 hd44780-driver = "0.4.0"
@@ -62,3 +64,6 @@ usb-device = "0.3.1"
 usbd-hid = "0.7.0"
 usbd-serial = "0.2.1"
 ws2812-pio = "0.8.0"
+
+[patch.crates-io]
+embedded-sdmmc = { git = "https://github.com/rust-embedded-community/embedded-sdmmc-rs", branch = "use-spidevice-properly" }

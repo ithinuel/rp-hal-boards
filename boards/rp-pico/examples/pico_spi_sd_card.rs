@@ -82,6 +82,7 @@ use rp_pico::hal::pac;
 
 // Import the SPI abstraction:
 use rp_pico::hal::spi;
+use embedded_hal::spi::SpiBus;
 
 // Import the GPIO abstraction:
 use rp_pico::hal::gpio;
@@ -208,13 +209,13 @@ fn main() -> ! {
     let spi_sclk: gpio::Pin<_, gpio::FunctionSpi, gpio::PullNone> = pins.gpio2.reconfigure();
     let spi_mosi: gpio::Pin<_, gpio::FunctionSpi, gpio::PullNone> = pins.gpio3.reconfigure();
     let spi_miso: gpio::Pin<_, gpio::FunctionSpi, gpio::PullUp> = pins.gpio4.reconfigure();
-    let spi_cs = pins.gpio5.into_push_pull_output();
+    let spi_cs = pins.gpio5.into_push_pull_output_in_state(gpio::PinState::High);
 
     // Create the SPI driver instance for the SPI0 device
     let spi = spi::Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk));
 
     // Exchange the uninitialised SPI driver for an initialised one
-    let spi = spi.init(
+    let mut spi = spi.init(
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
         400.kHz(), // card initialization happens at low baud rate
@@ -223,8 +224,12 @@ fn main() -> ! {
 
     let mut delay = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
 
+    spi.write(&[0xFF; 10]).unwrap();
+    let spi = embedded_hal_bus::spi::ExclusiveDevice::new(spi, spi_cs, delay)
+        .expect("unable to init ExclusiveDevice");
+
     info!("Initialize SPI SD/MMC data structures...");
-    let sdcard = SdCard::new(spi, spi_cs, delay);
+    let sdcard = SdCard::new(spi, delay);
     let mut volume_mgr = VolumeManager::new(sdcard, DummyTimesource::default());
 
     blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
@@ -241,12 +246,13 @@ fn main() -> ! {
     blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
 
     // Now that the card is initialized, clock can go faster
-    volume_mgr
-        .device()
-        .spi(|spi| spi.set_baudrate(clocks.peripheral_clock.freq(), 16.MHz()));
+    volume_mgr.device().spi(|spi| {
+        spi.bus_mut()
+            .set_baudrate(clocks.peripheral_clock.freq(), 16.MHz())
+    });
 
     info!("Getting Volume 0...");
-    let volume = match volume_mgr.open_volume(VolumeIdx(0)) {
+    let mut volume = match volume_mgr.open_volume(VolumeIdx(0)) {
         Ok(v) => v,
         Err(e) => {
             error!("Error getting volume 0: {}", defmt::Debug2Format(&e));
@@ -258,7 +264,7 @@ fn main() -> ! {
 
     // After we have the volume (partition) of the drive we got to open the
     // root directory:
-    let dir = match volume_mgr.open_root_dir(volume) {
+    let mut dir = match volume.open_root_dir() {
         Ok(dir) => dir,
         Err(e) => {
             error!("Error opening root dir: {}", defmt::Debug2Format(&e));
@@ -271,25 +277,24 @@ fn main() -> ! {
 
     // This shows how to iterate through the directory and how
     // to get the file names (and print them in hope they are UTF-8 compatible):
-    volume_mgr
-        .iterate_dir(dir, |ent| {
-            info!(
-                "/{}.{}",
-                core::str::from_utf8(ent.name.base_name()).unwrap(),
-                core::str::from_utf8(ent.name.extension()).unwrap()
-            );
-        })
-        .unwrap();
+    dir.iterate_dir(|ent| {
+        info!(
+            "/{}.{}",
+            core::str::from_utf8(ent.name.base_name()).unwrap(),
+            core::str::from_utf8(ent.name.extension()).unwrap()
+        );
+    })
+    .unwrap();
 
     blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
 
     let mut successful_read = false;
 
     // Next we going to read a file from the SD card:
-    if let Ok(file) = volume_mgr.open_file_in_dir(dir, "O.TST", Mode::ReadOnly) {
+    if let Ok(mut file) = dir.open_file_in_dir("O.TST", Mode::ReadOnly) {
         let mut buf = [0u8; 32];
-        let read_count = volume_mgr.read(file, &mut buf).unwrap();
-        volume_mgr.close_file(file).unwrap();
+        let read_count = file.read(&mut buf).unwrap();
+        drop(file);
 
         if read_count >= 2 {
             info!("READ {} bytes: {}", read_count, buf);
@@ -305,12 +310,9 @@ fn main() -> ! {
 
     blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
 
-    match volume_mgr.open_file_in_dir(dir, "O.TST", Mode::ReadWriteCreateOrTruncate) {
-        Ok(file) => {
-            volume_mgr
-                .write(file, b"\x42\x1E")
-                .unwrap();
-            volume_mgr.close_file(file).unwrap();
+    match dir.open_file_in_dir("O.TST", Mode::ReadWriteCreateOrTruncate) {
+        Ok(mut file) => {
+            file.write(b"\x42\x1E").unwrap();
         }
         Err(e) => {
             error!("Error opening file 'O.TST': {}", defmt::Debug2Format(&e));
@@ -318,6 +320,8 @@ fn main() -> ! {
         }
     }
 
+    drop(dir);
+    drop(volume);
     volume_mgr.free();
 
     blink_signals(&mut led_pin, &mut delay, &BLINK_OK_LONG);
